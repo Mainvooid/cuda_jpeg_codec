@@ -1,0 +1,5 @@
+*.cpp linguist-language=C++
+*.h linguist-language=C++
+*.cu linguist-language=C++
+*.cuh linguist-language=C++
+*.props linguist-language=C++

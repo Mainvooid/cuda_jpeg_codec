@@ -1,0 +1,7 @@
+/test
+/x64
+/.vs
+/cuda_jpeg_codec/x64
+*.jpeg
+*.jpg
+*.vcxproj.user

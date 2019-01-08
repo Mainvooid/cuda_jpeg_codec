@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ImportGroup Label="PropertySheets" />
+  <PropertyGroup Label="UserMacros" />
+
+  <PropertyGroup>
+    <!-- 指定第三方依赖目录 -->
+    <OpenCVPath>D:\ProgramData\opencv400_alpha_contrib_cuda_python</OpenCVPath>
+    <CUDAPath>C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v10.0</CUDAPath>
+    <CUDAHelpPath>C:\ProgramData\NVIDIA Corporation\CUDA Samples\v10.0\common</CUDAHelpPath>
+    <MSVCPath>D:\Program Files (x86)\Microsoft Visual Studio\2017\Professional\VC\Tools\MSVC\14.15.26726</MSVCPath>
+
+    <!-- 指定include目录 -->
+    <IncludePath>$(OpenCVPath)\include;$(OpenCVPath)\include\opencv2;$(CUDAPath)\include;$(MSVCPath)\include;$(CUDAHelpPath)\inc;$(IncludePath)</IncludePath>
+
+    <!-- 指定lib目录 -->
+    <LibraryPath Condition="'$(Platform)'=='X64'">$(OpenCVPath)\x64\vc15\lib;$(CUDAPath)\lib\x64;$(MSVCPath)\lib\x64;$(CUDAHelpPath)\lib\x64;$(LibraryPath)</LibraryPath>
+
+    <!-- 让系统PATH临时包含指定的dll目录 -->
+		<LocalDebuggerEnvironment Condition="'$(Platform)'=='X64'">PATH=$(OpenCVPath)\x64\vc15\bin;$(CUDAPath)\bin;%PATH%;</LocalDebuggerEnvironment>
+  </PropertyGroup>
+
+  <!-- 附加依赖项 -->
+  <ItemDefinitionGroup >
+    <Link>
+      <AdditionalDependencies>cublas.lib;cuda.lib;cudadevrt.lib;cudart.lib;cudnn.lib;cufft.lib;cufftw.lib;curand.lib;cusolver.lib;cusparse.lib;nppc.lib;nppial.lib;nppicc.lib;nppicom.lib;nppidei.lib;nppif.lib;nppig.lib;nppim.lib;nppist.lib;nppisu.lib;nppitc.lib;npps.lib;nvblas.lib;nvgraph.lib;nvml.lib;nvrtc.lib;OpenCL.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+
+    <Link Condition=" '$(Configuration)' == 'Debug' ">
+      <AdditionalDependencies>opencv_world400d.lib;opencv_img_hash400d.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+
+    <Link Condition=" '$(Configuration)' == 'Release' ">
+      <AdditionalDependencies>opencv_world400.lib;opencv_img_hash400.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+
+  <ItemGroup />
+</Project>
