@@ -1,5 +1,9 @@
 # 基于CUDA加速的JPEG编解码器
 
+编码环境
+- cuda 10.0(with npp)
+- vs2017
+- opencv 4.0(for test)
 
 ## 已完成功能
 
@@ -23,20 +27,20 @@
 - 支持图像缩放
 
 ### 解码器
-- TODO
+- 支持图像解码
 
 ---
 
 ## 性能测试
 
-GTX 1050Ti下仅开启图像压缩(减少了冗余判断及内存):
+GTX 1050Ti下仅开启图像压缩编码(减少了冗余判断及内存):
 - 3通道4096x4096,90%质量编码:数据上载时间4.1ms,编码时间10.3ms左右,50%质量体积减少一半,时间稍快.
 
 - 3通道1920*1080,90%压缩编码:总体GPU时间3ms以内,编码质量的影响几乎可以忽略.
 
 ---
 
-##使用方法
+## 使用方法
 ```cpp
 CudaJpegEncoder encoder = CudaJpegEncoder(1920, 1080, 3, 90);
 encoder.setData(src.data,PixelFormat::PIX_FMT_YUVI420);
