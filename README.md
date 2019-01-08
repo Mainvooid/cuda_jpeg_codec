@@ -13,6 +13,7 @@
 ### 解码器
 
 ---
+
 ## 待完善功能
 ### 基础
 - 支持更多图像格式及图像格式间的转换
@@ -23,7 +24,9 @@
 
 ### 解码器
 - TODO
+
 ---
+
 ## 性能测试
 
 GTX 1050Ti下仅开启图像压缩(减少了冗余判断及内存):
@@ -32,16 +35,11 @@ GTX 1050Ti下仅开启图像压缩(减少了冗余判断及内存):
 - 3通道1920*1080,90%压缩编码:总体GPU时间3ms以内,编码质量的影响几乎可以忽略.
 
 ---
-## 使用方法
 
-'''cpp
-
+##使用方法
+```cpp
 CudaJpegEncoder encoder = CudaJpegEncoder(1920, 1080, 3, 90);
-
 encoder.setData(src.data,PixelFormat::PIX_FMT_YUVI420);
-
 encoder.EncodeJpeg();
-
-WriteJpeg(output_fname, encoder.pDstJpeg, encoder.nOutputLenth);
-
-'''
+WriteJpeg(output_fname, encoder.pDstJpeg, encoder.nOutpuLenth);
+```
