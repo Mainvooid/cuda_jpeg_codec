@@ -4,4 +4,5 @@
 /cuda_jpeg_codec/x64
 *.jpeg
 *.jpg
-*.vcxproj.user
+*.vcxproj.use
+*.db
