@@ -86,6 +86,7 @@ CudaJpegEncoder::CudaJpegEncoder(int width, int height, int channel, int quality
 
 	/*--------------------量化表初始化--------------------*/
 	memset(aQuantizationTables, 0, 4 * sizeof(QuantizationTable));
+
 	//根据编码质量修改量化表
 	setQTByQuality(quality);
 
@@ -200,7 +201,7 @@ CudaJpegEncoder::CudaJpegEncoder(int width, int height, int channel, int quality
 		aDCTStep[i] = static_cast<Npp32s>(nPitch);//图像宽度(以像素为单位)x 8 x sizeof(Npp16s)。
 
 		//源图像定距设备缓冲区
-		NPP_CHECK_CUDA(cudaMallocPitch(&apSrcImage[i], &nPitch, aSrcSize[i].width, aSrcSize[i].height));
+		NPP_CHECK_CUDA(cudaMallocPitch(&apdSrcImage[i], &nPitch, aSrcSize[i].width, aSrcSize[i].height));
 		aSrcImageStep[i] = static_cast<Npp32s>(nPitch);
 
 		//分配DCT锁页内存(解码时)
@@ -210,7 +211,7 @@ CudaJpegEncoder::CudaJpegEncoder(int width, int height, int channel, int quality
 	///计算基线霍夫曼编码的临时缓冲区的大小并分配编码缓冲区
 	size_t nTempSize = 0;//临时设备缓冲区大小
 	NPP_CHECK_NPP(nppiEncodeHuffmanGetSize(aSrcSize[0], oFrameHeader.nComponents,&nTempSize));
-	NPP_CHECK_CUDA(cudaMalloc(&pJpegEncoderTemp, nTempSize));
+	NPP_CHECK_CUDA(cudaMalloc(&pdJpegEncoderTemp, nTempSize));
 
 #ifdef ONLY_IMAGE_COMPRESSION
 	//合理分配扫描头大小并分配缓冲区
@@ -257,21 +258,27 @@ CudaJpegEncoder::CudaJpegEncoder(int width, int height, int channel, int quality
 #endif // !ONLY_IMAGE_COMPRESSION
 
 	/*--------------------写JPEG--------------------*/
-	pDstJpeg = new unsigned char[nScanSize];//写入缓冲区头指针
+	NPP_CHECK_CUDA(cudaHostAlloc(&pDstJpeg, nScanSize, cudaHostAllocDefault));
 
 	nOutputLenth = 0;//写入缓冲区长度
 
 	//TODO YUV格式判断后分配//PIX_FMT_YUVI420
-	//mY = (unsigned char*)malloc(aSrcImageStep[0] * oFrameHeader.nHeight);
-	//mU = (unsigned char*)malloc(aSrcImageStep[1] * oFrameHeader.nHeight/2);
-	//mV = (unsigned char*)malloc(aSrcImageStep[2] * oFrameHeader.nHeight/2);
 
-	mY = (unsigned char*)malloc(oFrameHeader.nWidth * oFrameHeader.nHeight);
-	mU = (unsigned char*)malloc(oFrameHeader.nWidth/2 * oFrameHeader.nHeight / 2);//2:1采样,为Y的1/4大小
-	mV = (unsigned char*)malloc(oFrameHeader.nWidth/2 * oFrameHeader.nHeight / 2);
+	NPP_CHECK_CUDA(cudaHostAlloc(&mY, oFrameHeader.nWidth * oFrameHeader.nHeight, cudaHostAllocDefault));
+	NPP_CHECK_CUDA(cudaHostAlloc(&mU, oFrameHeader.nWidth / 2 * oFrameHeader.nHeight / 2, cudaHostAllocDefault));//2:1采样,为Y的1/4大小
+	NPP_CHECK_CUDA(cudaHostAlloc(&mV, oFrameHeader.nWidth / 2 * oFrameHeader.nHeight / 2, cudaHostAllocDefault));
 
 	//uint32_t row_bytes = 4096 * 3;
 	//NPP_CHECK_CUDA(cudaMalloc(&mRGBData, row_bytes * 4096));
+	
+	/*--------------------异步流--------------------*/
+	//分配及初始化多个stream,主要用于异步内存拷贝
+	pStreams = (cudaStream_t *)malloc(3 * sizeof(cudaStream_t));
+
+	for (int i = 0; i < 3; i++)
+	{
+		NPP_CHECK_CUDA(cudaStreamCreate(&(pStreams[i])));
+	}
 }
 
 
@@ -283,7 +290,12 @@ CudaJpegEncoder::~CudaJpegEncoder()
 
 	NPP_CHECK_CUDA(cudaFree(pdScan));
 	NPP_CHECK_CUDA(cudaFree(pdQuantizationTables));
-	NPP_CHECK_CUDA(cudaFree(pJpegEncoderTemp));
+	NPP_CHECK_CUDA(cudaFree(pdJpegEncoderTemp));
+
+	NPP_CHECK_CUDA(cudaFreeHost(mY));
+	NPP_CHECK_CUDA(cudaFreeHost(mU));
+	NPP_CHECK_CUDA(cudaFreeHost(mV));
+	NPP_CHECK_CUDA(cudaFreeHost(pDstJpeg));
 
 	for (int i = 0; i < oFrameHeader.nComponents; ++i)
 	{
@@ -293,19 +305,20 @@ CudaJpegEncoder::~CudaJpegEncoder()
 		NPP_CHECK_CUDA(cudaFree(apdDCT[i]));
 		//NPP_CHECK_CUDA(cudaFreeHost(aphDCT[i]));
 
-		NPP_CHECK_CUDA(cudaFree(apSrcImage[i]));
-		NPP_CHECK_CUDA(cudaFree(apDstImage[i]));
+		NPP_CHECK_CUDA(cudaFree(apdSrcImage[i]));
+		NPP_CHECK_CUDA(cudaFree(apdDstImage[i]));
+	}
+
+	for (int i = 0; i < 3; i++)
+	{
+		NPP_CHECK_CUDA(cudaStreamDestroy(pStreams[i]));
 	}
 
 	//异常安全
 	//free_s(pHuffmanDCTables);
 	//free_s(pHuffmanACTables);
-	free_s(mY);
-	free_s(mU);
-	free_s(mV);
-
+	free_s(pStreams);
 	//释放new出的内存
-	deleteA_s(pDstJpeg);
 	//deleteA_s(pSrcData);
 }
 
@@ -360,22 +373,30 @@ CudaJpegEncoder::~CudaJpegEncoder()
 //	//nppiRGBToYUV_8u_C3P3R(pdSrcData, (int)aSrcImageStep[0], apSrcImage, (int)aSrcImageStep[0], oSizeROI);
 //	//nppiRGBToYUV420_8u_C3P3R(pdSrcData, (int)aSrcImageStep[0], apSrcImage, aSrcImageStep, oSizeROI);
 //}
-
 //TODO 提供接收YUV图像及数据并处理的方法
 void CudaJpegEncoder::setData(Npp8u * yuv_data, int yuv_fmt)
 {
+#ifdef DEBUG_MEASURE_KERNEL_TIME
+	cudaEvent_t start, stop;
+	float elapsedTime;
+	NPP_CHECK_CUDA(cudaEventCreate(&start));
+	NPP_CHECK_CUDA(cudaEventCreate(&stop));
+	NPP_CHECK_CUDA(cudaEventRecord(start, 0));//0默认流
+#endif // !DEBUG_MEASURE_KERNEL_TIME
+
 	if (!yuv_data)
 	{
 		return;
 	}
-	uint32_t    off=0;
-	uint32_t    off_yuv=0;
+	uint32_t    off = 0;
+	uint32_t    off_yuv = 0;
 	uint32_t    half_h = oFrameHeader.nHeight >> 1;
 	uint32_t    half_w = oFrameHeader.nWidth >> 1;
 
 	for (int i = 0; i < oFrameHeader.nHeight; i++)
 	{
-		memcpy(mY + off, yuv_data + off_yuv, oFrameHeader.nWidth);//Y(HxW)复制到mY
+		NPP_CHECK_CUDA(cudaMemcpy(mY + off, yuv_data + off_yuv, oFrameHeader.nWidth, cudaMemcpyHostToHost));//Y(HxW)复制到mY
+
 		off += oFrameHeader.nWidth;
 		off_yuv += oFrameHeader.nWidth;
 	}
@@ -391,8 +412,10 @@ void CudaJpegEncoder::setData(Npp8u * yuv_data, int yuv_fmt)
 		for (int i = 0; i < half_h; i++)
 		{
 			//从I420图像拆解UV,YYYYYYYYUUVV,单块U或V的大小为half_w*(half_h/2)
-			memcpy(mU + off, yuv_data + off_yuv, half_w);//跳过Y并把紧接着的俩个U交替复制到mU(分行存储,mU大小half_w*half_h)
-			memcpy(mV + off, yuv_data + off_yuv + uv_size, half_w);//跳过Y和U并把紧接着的俩个V交替复制到mV
+			//memcpy(mU + off, yuv_data + off_yuv, half_w);//跳过Y并把紧接着的俩个U交替复制到mU(分行存储,mU大小half_w*half_h)
+			//memcpy(mV + off, yuv_data + off_yuv + uv_size, half_w);//跳过Y和U并把紧接着的俩个V交替复制到mV
+			NPP_CHECK_CUDA(cudaMemcpy(mU + off, yuv_data + off_yuv, half_w, cudaMemcpyHostToHost));
+			NPP_CHECK_CUDA(cudaMemcpy(mV + off, yuv_data + off_yuv + uv_size, half_w, cudaMemcpyHostToHost));
 			off_yuv += half_w;
 			off += half_w;
 		}
@@ -476,36 +499,202 @@ void CudaJpegEncoder::setData(Npp8u * yuv_data, int yuv_fmt)
 		break;
 	}
 
-#ifdef DEBUG_MEASURE_KERNEL_TIME
-	cudaEvent_t start, stop;
-	float elapsedTime;
-	NPP_CHECK_CUDA(cudaEventCreate(&start));
-	NPP_CHECK_CUDA(cudaEventRecord(start, 0));//0默认流
-#endif // !DEBUG_MEASURE_KERNEL_TIME
-
 	if (oFrameHeader.nComponents == 1) {
-		//TODO 此处报错,独立支持单通道图像编码
-		NPP_CHECK_CUDA(cudaMemcpy(apSrcImage[0], mY, oFrameHeader.nWidth * oFrameHeader.nHeight, cudaMemcpyHostToDevice));
-		NPP_CHECK_CUDA(cudaMemcpy(apSrcImage[1], mU, oFrameHeader.nWidth / 2 * oFrameHeader.nHeight / 2, cudaMemcpyHostToDevice));
-		NPP_CHECK_CUDA(cudaMemcpy(apSrcImage[2], mV, oFrameHeader.nWidth / 2 * oFrameHeader.nHeight / 2, cudaMemcpyHostToDevice));
+		//TODO 独立支持单通道图像编码
 	}
 	else if (oFrameHeader.nComponents == 3) {
 		//定距内存对齐
-		NPP_CHECK_CUDA(cudaMemcpy2D(apSrcImage[0],
+		NPP_CHECK_CUDA(cudaMemcpy2D(apdSrcImage[0],
+			aSrcImageStep[0],
+			mY,
+			oFrameHeader.nWidth,
+			oFrameHeader.nWidth,
+			oFrameHeader.nHeight,
+			cudaMemcpyHostToDevice));
+		NPP_CHECK_CUDA(cudaMemcpy2D(apdSrcImage[1],
+			aSrcImageStep[1],
+			mU,
+			oFrameHeader.nWidth / 2,
+			oFrameHeader.nWidth / 2,
+			oFrameHeader.nHeight / 2,
+			cudaMemcpyHostToDevice));
+		NPP_CHECK_CUDA(cudaMemcpy2D(apdSrcImage[2],
+			aSrcImageStep[2],
+			mV,
+			oFrameHeader.nWidth / 2,
+			oFrameHeader.nWidth / 2,
+			oFrameHeader.nHeight / 2,
+			cudaMemcpyHostToDevice));
+	}
+
+#ifdef DEBUG_MEASURE_KERNEL_TIME
+
+	NPP_CHECK_CUDA(cudaEventRecord(stop, 0));
+	NPP_CHECK_CUDA(cudaEventSynchronize(stop));
+	NPP_CHECK_CUDA(cudaEventElapsedTime(&elapsedTime, start, stop));
+	printf_s("JPEG setData:0 (file:%s, line:%d) elapsed time : %f ms\n", __FILE__, __LINE__, elapsedTime);
+	NPP_CHECK_CUDA(cudaEventDestroy(start));
+	NPP_CHECK_CUDA(cudaEventDestroy(stop));
+#endif // !DEBUG_MEASURE_KERNEL_TIME
+
+}
+//TODO 提供接收YUV图像及数据并处理的方法
+void CudaJpegEncoder::setDataAsync(Npp8u * yuv_data, int yuv_fmt)
+{
+#ifdef DEBUG_MEASURE_KERNEL_TIME
+	cudaEvent_t start0, stop0;
+	cudaEvent_t start1, stop1;
+	cudaEvent_t start2, stop2;
+	float elapsedTime0, elapsedTime1, elapsedTime2;
+	NPP_CHECK_CUDA(cudaEventCreate(&start0));
+	NPP_CHECK_CUDA(cudaEventCreate(&start1));
+	NPP_CHECK_CUDA(cudaEventCreate(&start2));
+	NPP_CHECK_CUDA(cudaEventCreate(&stop0));
+	NPP_CHECK_CUDA(cudaEventCreate(&stop1));
+	NPP_CHECK_CUDA(cudaEventCreate(&stop2));
+	NPP_CHECK_CUDA(cudaEventRecord(start0, pStreams[0]));
+	NPP_CHECK_CUDA(cudaEventRecord(start1, pStreams[1]));
+	NPP_CHECK_CUDA(cudaEventRecord(start2, pStreams[2]));
+#endif // !DEBUG_MEASURE_KERNEL_TIME
+	if (!yuv_data)
+	{
+		return;
+	}
+	uint32_t    off=0;
+	uint32_t    off_yuv=0;
+	uint32_t    half_h = oFrameHeader.nHeight >> 1;
+	uint32_t    half_w = oFrameHeader.nWidth >> 1;
+
+	for (int i = 0; i < oFrameHeader.nHeight; i++)
+	{
+		NPP_CHECK_CUDA(cudaMemcpyAsync(mY + off, yuv_data + off_yuv, oFrameHeader.nWidth, cudaMemcpyHostToHost,pStreams[0]));//Y(HxW)复制到mY
+
+		off += oFrameHeader.nWidth;
+		off_yuv += oFrameHeader.nWidth;
+	}
+
+	switch (yuv_fmt)
+	{
+	case PixelFormat::PIX_FMT_YUVI420:
+	{
+		uint32_t uv_size = half_w * half_h;
+		off_yuv = oFrameHeader.nWidth * oFrameHeader.nHeight;
+		off = 0;
+
+		for (int i = 0; i < half_h; i++)
+		{
+			//从I420图像拆解UV,YYYYYYYYUUVV,单块U或V的大小为half_w*(half_h/2)
+			//memcpy(mU + off, yuv_data + off_yuv, half_w);//跳过Y并把紧接着的俩个U交替复制到mU(分行存储,mU大小half_w*half_h)
+			//memcpy(mV + off, yuv_data + off_yuv + uv_size, half_w);//跳过Y和U并把紧接着的俩个V交替复制到mV
+			NPP_CHECK_CUDA(cudaMemcpyAsync(mU + off, yuv_data + off_yuv, half_w, cudaMemcpyHostToHost, pStreams[1]));
+			NPP_CHECK_CUDA(cudaMemcpyAsync(mV + off, yuv_data + off_yuv + uv_size, half_w, cudaMemcpyHostToHost, pStreams[2]));
+			off_yuv += half_w;
+			off += half_w;
+		}
+
+		//for (int i = 0; i < half_h; i++)
+		//{
+		//	memset(mU + off, 128, half_w);//灰度图像Y=R=G=B,U=V=128
+		//	memset(mV + off, 128, half_w);
+		//	off_yuv += half_w;
+		//	off += half_w;
+		//}
+
+		//if (mChannel == 3) {
+		//	for (int i = 0; i < half_h; i++)
+		//	{
+		//		memcpy(mU + off, yuv_data + off_yuv, half_w);//从I420图像拆解UV
+		//		memcpy(mV + off, yuv_data + off_yuv + half_size, half_w);
+		//		off_yuv += half_w;
+		//		off += half_w;
+		//	}
+		//}
+		//else if (mChannel == 1) {
+		//	for (int i = 0; i < half_h; i++)
+		//	{
+		//		memset(mU + off, 128, half_w);//灰度图像Y=R=G=B,U=V=128
+		//		memset(mV + off, 128, half_w);
+		//		off_yuv += half_w;
+		//		off += half_w;
+		//	}
+		//}
+		break;
+	}
+	case PixelFormat::PIX_FMT_NV12:
+	{
+		uint8_t*    yuv_ptr;
+		uint8_t*    u_ptr;
+		uint8_t*    v_ptr;
+		off_yuv = oFrameHeader.nWidth * oFrameHeader.nHeight;
+		off = 0;
+
+		for (int i = 0; i < half_h; i++)
+		{
+			yuv_ptr = yuv_data + off_yuv;
+			u_ptr = mU + off;
+			v_ptr = mV + off;
+			for (int j = 0; j < oFrameHeader.nWidth; j += 2)
+			{
+				*u_ptr++ = *yuv_ptr++;//*u_ptr=*yuv_ptr;*u_ptr++;*yuv_ptr++;
+				*v_ptr++ = *yuv_ptr++;//UVUV交替采样
+			}
+			off_yuv += oFrameHeader.nWidth;
+			off += half_w;
+		}
+		break;
+	}
+	case PixelFormat::PIX_FMT_NV21:
+	{
+		uint8_t*    yuv_ptr;
+		uint8_t*    u_ptr;
+		uint8_t*    v_ptr;
+		off_yuv = oFrameHeader.nWidth *  oFrameHeader.nHeight;
+		off = 0;
+
+		for (int i = 0; i < half_h; i++)
+		{
+			yuv_ptr = yuv_data + off_yuv;
+			u_ptr = mU + off;
+			v_ptr = mV + off;
+			for (int j = 0; j < oFrameHeader.nWidth; j += 2)
+			{
+				*v_ptr++ = *yuv_ptr++;//VUVU交替采样
+				*u_ptr++ = *yuv_ptr++;
+			}
+			off_yuv += oFrameHeader.nWidth;
+			off += half_w;
+		}
+		break;
+	}
+	default:
+		cerr << "暂未支持的编码模式." << endl;
+		break;
+	}
+
+	cudaStreamSynchronize(pStreams[0]);
+	cudaStreamSynchronize(pStreams[1]);
+	cudaStreamSynchronize(pStreams[2]);
+
+	if (oFrameHeader.nComponents == 1) {
+		//TODO 独立支持单通道图像编码
+	}
+	else if (oFrameHeader.nComponents == 3) {
+		//定距内存对齐
+		NPP_CHECK_CUDA(cudaMemcpy2DAsync(apdSrcImage[0],
 									aSrcImageStep[0],
 									mY,
 									oFrameHeader.nWidth,
 									oFrameHeader.nWidth,
 									oFrameHeader.nHeight,
 									cudaMemcpyHostToDevice));
-		NPP_CHECK_CUDA(cudaMemcpy2D(apSrcImage[1],
+		NPP_CHECK_CUDA(cudaMemcpy2DAsync(apdSrcImage[1],
 									aSrcImageStep[1],
 									mU,
 									oFrameHeader.nWidth / 2,
 									oFrameHeader.nWidth/2,
 									oFrameHeader.nHeight / 2,
 									cudaMemcpyHostToDevice));
-		NPP_CHECK_CUDA(cudaMemcpy2D(apSrcImage[2],
+		NPP_CHECK_CUDA(cudaMemcpy2DAsync(apdSrcImage[2],
 									aSrcImageStep[2],
 									mV,
 									oFrameHeader.nWidth / 2,
@@ -513,15 +702,32 @@ void CudaJpegEncoder::setData(Npp8u * yuv_data, int yuv_fmt)
 									oFrameHeader.nHeight / 2,
 									cudaMemcpyHostToDevice));
 	}
+	cudaStreamSynchronize(pStreams[0]);
+	cudaStreamSynchronize(pStreams[1]);
+	cudaStreamSynchronize(pStreams[2]);
 
 #ifdef DEBUG_MEASURE_KERNEL_TIME
-	NPP_CHECK_CUDA(cudaEventCreate(&stop));
-	NPP_CHECK_CUDA(cudaEventRecord(stop, 0));
-	NPP_CHECK_CUDA(cudaEventSynchronize(stop));
-	NPP_CHECK_CUDA(cudaEventElapsedTime(&elapsedTime, start, stop));
-	printf("JPEG setData: (file:%s, line:%d) elapsed time : %f ms\n", __FILE__, __LINE__, elapsedTime);
-	NPP_CHECK_CUDA(cudaEventDestroy(start));
-	NPP_CHECK_CUDA(cudaEventDestroy(stop));
+
+	NPP_CHECK_CUDA(cudaEventRecord(stop0, pStreams[0]));
+	NPP_CHECK_CUDA(cudaEventSynchronize(stop0));
+	NPP_CHECK_CUDA(cudaEventElapsedTime(&elapsedTime0, start0, stop0));
+	printf_s("JPEG setData:pStreams[0] (file:%s, line:%d) elapsed time : %f ms\n", __FILE__, __LINE__, elapsedTime0);
+	NPP_CHECK_CUDA(cudaEventDestroy(start0));
+	NPP_CHECK_CUDA(cudaEventDestroy(stop0));
+
+	NPP_CHECK_CUDA(cudaEventRecord(stop1, pStreams[1]));
+	NPP_CHECK_CUDA(cudaEventSynchronize(stop1));
+	NPP_CHECK_CUDA(cudaEventElapsedTime(&elapsedTime1, start1, stop1));
+	printf_s("JPEG setData:pStreams[1] (file:%s, line:%d) elapsed time : %f ms\n", __FILE__, __LINE__, elapsedTime1);
+	NPP_CHECK_CUDA(cudaEventDestroy(start1));
+	NPP_CHECK_CUDA(cudaEventDestroy(stop1));
+
+	NPP_CHECK_CUDA(cudaEventRecord(stop2, pStreams[2]));
+	NPP_CHECK_CUDA(cudaEventSynchronize(stop2));
+	NPP_CHECK_CUDA(cudaEventElapsedTime(&elapsedTime2, start2, stop2));
+	printf_s("JPEG setData:pStreams[2] (file:%s, line:%d) elapsed time : %f ms\n", __FILE__, __LINE__, elapsedTime2);
+	NPP_CHECK_CUDA(cudaEventDestroy(start2));
+	NPP_CHECK_CUDA(cudaEventDestroy(stop2));
 #endif // !DEBUG_MEASURE_KERNEL_TIME
 
 }
@@ -561,13 +767,14 @@ void CudaJpegEncoder::EncodeJpeg()
 			apDstImage[i], aDstImageStep[i], oDstImageSize, oDstImageROI, eInterploationMode));
 	}
 #else
+	//重定向
 	for (size_t i = 0; i < oFrameHeader.nComponents; i++)
 	{
-		apDstImage[i] = apSrcImage[i];
+		apdDstImage[i] = apdSrcImage[i];
 		aDstImageStep[i] = aSrcImageStep[i];
 		aDstSize[i] = aSrcSize[i];
 
-		apSrcImage[i] = NULL;
+		apdSrcImage[i] = NULL;
 		aSrcImageStep[i] = NULL;
 	}
 #endif // !ENABLE_IMAGE_SCALING
@@ -578,7 +785,7 @@ void CudaJpegEncoder::EncodeJpeg()
 	for (int i = 0; i < oFrameHeader.nComponents; ++i)
 	{
 		NPP_CHECK_NPP(nppiDCTQuantFwd8x8LS_JPEG_8u16s_C1R_NEW(
-			apDstImage[i],
+			apdDstImage[i],
 			aDstImageStep[i],
 			apdDCT[i],
 			aDCTStep[i],
@@ -618,7 +825,7 @@ void CudaJpegEncoder::EncodeJpeg()
 			*apHuffmanDCTableEncode,
 			*apHuffmanACTableEncode,
 			aDstSize[0],
-			pJpegEncoderTemp));
+			pdJpegEncoderTemp));
 	}
 	else if (oFrameHeader.nComponents == 3) {
 		Npp8u * hpCodesDC[3];
@@ -632,7 +839,7 @@ void CudaJpegEncoder::EncodeJpeg()
 			hpTableDC[i] = pHuffmanDCTables[i].aTable;
 			hpTableAC[i] = pHuffmanACTables[i].aTable;
 		}
-		//霍夫曼3通道编码
+		//霍夫曼3通道优化编码
 		NPP_CHECK_NPP(nppiEncodeOptimizeHuffmanScan_JPEG_8u16s_P3R(
 			apdDCT,
 			aDCTStep,
@@ -650,7 +857,7 @@ void CudaJpegEncoder::EncodeJpeg()
 			apHuffmanDCTableEncode,
 			apHuffmanACTableEncode,
 			aDstSize,
-			pJpegEncoderTemp));
+			pdJpegEncoderTemp));
 		//优化非优化似乎没有区别
 		 //NPP_CHECK_NPP(nppiEncodeHuffmanScan_JPEG_8u16s_P3R(
 		 //	apdDCT,
@@ -665,8 +872,6 @@ void CudaJpegEncoder::EncodeJpeg()
 		 //	apHuffmanACTableEncode,
 		 //	aDstSize,
 		 //	pJpegEncoderTemp));
-
-
 	}
 	else {
 		cerr << "暂未支持的输入通道数." << endl;
@@ -701,7 +906,7 @@ void CudaJpegEncoder::EncodeJpeg()
 	NPP_CHECK_CUDA(cudaEventRecord(stop, 0));
 	NPP_CHECK_CUDA(cudaEventSynchronize(stop));
 	NPP_CHECK_CUDA(cudaEventElapsedTime(&elapsedTime, start, stop));
-	printf("JPEG encode: (file:%s, line:%d) elapsed time : %f ms\n", __FILE__, __LINE__, elapsedTime);
+	printf_s("JPEG encode: (file:%s, line:%d) elapsed time : %f ms\n", __FILE__, __LINE__, elapsedTime);
 	NPP_CHECK_CUDA(cudaEventDestroy(start));
 	NPP_CHECK_CUDA(cudaEventDestroy(stop));
 #endif // !DEBUG_MEASURE_KERNEL_TIME

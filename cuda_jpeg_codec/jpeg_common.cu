@@ -160,6 +160,7 @@ namespace jpeg_common {
 	}
 
 	void jpeg_common::setQTByQuality(int nQualityFactor) {
+		//TODO 根据1,3通道还可以优化
 		nppiQuantFwdRawTableInit_JPEG_8u(_STD_Y_QT, nQualityFactor);
 		nppiQuantFwdRawTableInit_JPEG_8u(_STD_UV_QT, nQualityFactor);
 		/*与npp实现等价
@@ -324,8 +325,8 @@ namespace jpeg_common {
 
 		do
 		{
-			//0xff=255 u为无符号的意思
-			while (c != 0xFFU && nPos < nLength)
+			//0xff=255
+			while (c != FF && nPos < nLength)
 			{
 				c = pData[nPos++];
 			}
@@ -333,9 +334,9 @@ namespace jpeg_common {
 			if (nPos >= nLength)
 				return -1;
 
-			//c == 0xffu
+			//c == 0xff
 			c = pData[nPos++];
-		} while (c == 0 || c == 0x0FFU);
+		} while (c == 0 || c == FF);
 
 		return c;
 	}

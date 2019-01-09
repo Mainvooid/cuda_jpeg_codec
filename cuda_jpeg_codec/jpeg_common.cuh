@@ -1,6 +1,4 @@
 ﻿#pragma once
-#ifndef JPEG_COMMON_H
-#define JPEG_COMMON_H
 
 #include <algorithm>
 #include <stdio.h>
@@ -37,7 +35,7 @@
 #define deleteA_s(p) if(p!=NULL){delete[] p;p=NULL;}
 
 /*--------------------常用标记数据段--------------------*/
-#define FF    0x0FF  //标记段的标记
+#define FF    0x0FF  //标记段的标记 0xff=255
 
 //帧开始标记，Start of Frame，非层次哈夫曼编码
 #define SOF0  0x0C0  //基线离散余弦变换
@@ -409,5 +407,3 @@ enum PixelFormat {
 //
 //	PIX_FMT_NB,        ///< number of pixel formats, DO NOT USE THIS if you want to link with shared libav* because the number of formats might differ between versions
 //};
-
-#endif // !JPEG_COMMON_H

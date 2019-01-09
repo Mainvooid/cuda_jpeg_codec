@@ -1,10 +1,8 @@
 ﻿#pragma once
-#ifndef JPEG_ENCODER_H
-#define JPEG_ENCODER_H
 
 #include "jpeg_common.cuh"
-//TODO 相关检查 1和3通道图像要求像素指针与基础数据类型对齐，即pData％sizof（数据类型）== 0
-//TODO 内存分配与释放
+//TODO 相关检查,1和3通道图像要求像素指针与基础数据类型对齐，即pData％sizof（数据类型）== 0
+//TODO 内存安全分配与释放
 
 /*NOTE:
 *ROI作为单个NppiSize结构传递，它包含高度和高度,ROI的第一个像素由图像数据指针的位置指定.函数后缀标有R的都支持ROI处理.
@@ -59,6 +57,13 @@ public:
 	void setData(Npp8u * yuv_data, int yuv_fmt);
 
 	/**
+	*@brief 数据准备:输入YUV图像拆分为3通道并上传GPU(异步版本,3个异步流,可以提速40%)
+	*@param yuv_data YUV图像数据
+	*@param data_size YUV图像长度
+	*/
+	void setDataAsync(Npp8u * yuv_data, int yuv_fmt);
+
+	/**
 	*@brief 编码
 	*编码结果:数据指针encoder.pDstJpeg,长度encoder.nOutputLenth
 	*/
@@ -92,18 +97,17 @@ public:
 
 	int nInputLength;//源图像长度
 	NppiSize aSrcSize[3];//源图像3通道子图大小,感兴趣区域(ROI)
-	Npp8u *apSrcImage[3];//源图像设备缓冲区YUV
+	Npp8u *apdSrcImage[3];//源图像设备缓冲区YUV
 	Npp32s aSrcImageStep[3];//定距分配的间隔(连续行之间的字节数)
 
 	unsigned char *pDstJpeg;//目标图像主机数据(写入缓冲区头指针)
 	int nOutputLenth;//最终编码主机数据长度
 	NppiSize oDstImageSize;//目标图像大小
-	Npp8u *apDstImage[3];//目标图像设备缓冲区
+	Npp8u *apdDstImage[3];//目标图像设备缓冲区
 	Npp32s aDstImageStep[3];//目标图像定距分配的间隔(连续行之间的字节数)
 	NppiSize aDstSize[3];//目标图像3通道子图大小,感兴趣区域(ROI),如果没有缩放则=aSrcSize
 
-	Npp8u *pJpegEncoderTemp;//编码临时设备缓冲区
-
+	Npp8u *pdJpegEncoderTemp;//编码临时缓冲区
 
 	int nMCUBlocksH;//水平最大采样系数
 	int nMCUBlocksV;//垂直最大采样系数
@@ -116,10 +120,8 @@ public:
 public:
 
 	//Npp8u* mRGBData;
-	unsigned char* mY;//Y通道 host
-	unsigned char* mU;//Cb通道 host
-	unsigned char* mV;//Cr通道 host
-
+	unsigned char* mY;//Y通道 cudahost
+	unsigned char* mU;//Cb通道 cudahost
+	unsigned char* mV;//Cr通道 cudahost
+	cudaStream_t *pStreams;//异步流
 };
-
-#endif // !JPEG_ENCODER_H

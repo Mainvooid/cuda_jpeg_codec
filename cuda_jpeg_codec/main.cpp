@@ -40,11 +40,11 @@ using namespace jpeg_common;
 int main(int argc, char **argv)
 {
 	//测试数据YUVI420
-	//std::string input_fname = "../data/4K.jpg";
-	//std::string output_fname = "../data/4K_gen.jpg";
+	std::string input_fname = "../data/4K.jpg";
+	std::string output_fname = "../data/4K_gen.jpg";
 
-	std::string input_fname = "../data/1080P.jpg";
-	std::string output_fname = "../data/1080P_gen.jpg";
+	//std::string input_fname = "../data/1080P.jpg";
+	//std::string output_fname = "../data/1080P_gen.jpg";
 
 	cv::Mat src = cv::imread(input_fname);
 	cv::cvtColor(src, src, cv::COLOR_BGR2YUV_I420);
@@ -55,11 +55,13 @@ int main(int argc, char **argv)
 	//waitKey(0);
 
 	//初始化编码器(宽高通道编码质量) 目前还未独立支持单通道编码,而是在3通道图像上通过UV分量置128来实现灰度编码.
-	//CudaJpegEncoder encoder= CudaJpegEncoder(4096, 4096, 3, 90);
-	CudaJpegEncoder encoder = CudaJpegEncoder(1920, 1080, 3, 90);
+	CudaJpegEncoder encoder= CudaJpegEncoder(4096, 4096, 3, 90);
+	//CudaJpegEncoder encoder = CudaJpegEncoder(1920, 1080, 3, 90);
 
 	//传YUV主机数据
-	encoder.setData(src.data, PixelFormat::PIX_FMT_YUVI420);
+	//encoder.setData(src.data, PixelFormat::PIX_FMT_YUVI420);
+
+	encoder.setDataAsync(src.data, PixelFormat::PIX_FMT_YUVI420);
 
 	//编码
 	encoder.EncodeJpeg();
