@@ -64,3 +64,11 @@ encoder.setDataAsync(src.data, PixelFormat::PIX_FMT_YUVI420);//异步版本性�
 encoder.EncodeJpeg();
 WriteJpeg(output_fname, encoder.pDstJpeg, encoder.nOutpuLenth);
 ```
+
+---
+
+## 赞赏
+
+如果觉得项目有帮助可以扫码赞赏,以支持我更好地完善项目.
+
+![支付宝收钱码](http://images-gb.oss-cn-hangzhou.aliyuncs.com/person/%E6%94%AF%E4%BB%98%E5%AE%9D%E6%94%B6%E9%92%B1%E7%A0%81.jpg)
