@@ -67,5 +67,5 @@ WriteJpeg(output_fname, encoder.pDstJpeg, encoder.nOutpuLenth);
 
 ---
 
-## 商务合作
-商务合作:guobao.v@gmail.com
+## 合作
+合作:guobao.v@gmail.com
