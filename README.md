@@ -1,5 +1,5 @@
 # 基于CUDA加速的JPEG编解码器
-
+> CUDA10.1版本已经发布了nvJPEG,故而此存储库停止维护.
 编码环境
 - cuda 10.0(with npp)
 - vs2017
